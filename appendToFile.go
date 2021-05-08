@@ -87,7 +87,7 @@ func rotate() {
 		if result {
 			go func() { // no need to wait for gzip and s3
 				err := gzipFile(fullFileNameNew, fullFileNameNewGz)
-				if err == nil {
+				if err == nil && config.Aws.Switch == true {
 					sendToS3(fullFileNameNewGz)
 				}
 			}()

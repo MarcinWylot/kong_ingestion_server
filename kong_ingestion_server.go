@@ -30,6 +30,7 @@ var config = struct {
 		BufferIncrement int
 	}
 	Aws struct {
+		Switch          bool
 		Bucket          string
 		BucketFolder    string
 		AccessKeyId     string
@@ -37,6 +38,7 @@ var config = struct {
 		Region          string
 	}
 	Timescale struct {
+		Switch           bool
 		Table            string
 		ColumnNames      []string
 		ConnectionString string
@@ -59,7 +61,9 @@ func init() {
 	openFile()
 	rotateCounter = lineCounter(fullFileName)
 
-	timescaleConnect()
+	if config.Timescale.Switch == true {
+		timescaleConnect()
+	}
 }
 
 func homeView(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +81,11 @@ func processLogs(data []byte, ctx context.Context) error {
 	}
 
 	log.Printf("Storing %d entries\n", len(array))
-	err = addToDB(array, ctx)
-	if err != nil {
-		return err
+	if config.Timescale.Switch == true {
+		err = addToDB(array, ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = appendToFile(array)

@@ -1,7 +1,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About Kong Ingestion Server
 
-Kong Ingestion Server (KIS) is an HTTP server in Go serving as a proxy between Kong Gateway Http log plugin and TimescaleDB. KIS received batched of logs in a form of JSON objects, parses them and stores in the database, local filesystem, and S3 bucket. 
+Kong Ingestion Server (KIS) is an HTTP server in Go serving as a bridge between Kong Gateway HTTP log plugin and TimescaleDB. KIS received batched of logs in a form of JSON objects, parses them and stores in the database, local filesystem, and S3 bucket. 
 
 ![Architecture](architecture.svg)
 
