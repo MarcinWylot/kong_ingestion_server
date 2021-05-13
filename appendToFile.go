@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,12 +84,15 @@ func lineCounter(file string) int {
 
 func rotate() {
 	if rotateCounter >= config.File.RotateInterval {
-		fullFileNameNew, fullFileNameNewGz, result := rotateFile()
+		fullFileNameNew, _, timestamp, result := rotateFile()
 		if result {
 			go func() { // no need to wait for gzip and s3
-				err := gzipFile(fullFileNameNew, fullFileNameNewGz)
-				if err == nil && config.Aws.Switch == true {
-					sendToS3(fullFileNameNewGz)
+				fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
+				if err == nil {
+					fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
+					if err == nil && config.Aws.Switch == true {
+						sendToS3(fullFileNameNewGz, timestamp)
+					}
 				}
 			}()
 		}
@@ -125,48 +129,67 @@ func ifFileExits(file_base string, cnt int) (string, string, error) {
 	}
 }
 
-func gzipFile(source, target string) error {
-	filename := filepath.Base(source)
+func renameWithChecksum(source string) (string, error) {
+	// add checksum to the file name
+	// helps to avoid collisions, and add extra control for files
+	checksum, err := sha256sum(source)
+	if err != nil {
+		return "", err
+	}
+	sourceChecksum := fmt.Sprintf("%s.%s", source, checksum)
+	err = os.Rename(source, sourceChecksum)
+	if err != nil {
+		return "", err
+	}
+	return sourceChecksum, err
+}
+
+func gzipFile(source, target_deprecated string) (string, error) {
+
+	target := fmt.Sprintf("%s.gz", source)
 
 	reader, err := os.Open(source)
-	defer reader.Close()
 	if err != nil {
 		log.Printf("Unable to open file %s, %v\n", source, err)
-		return err
+		return target, err
 	}
+	defer reader.Close()
 
 	writer, err := os.Create(target)
-	defer writer.Close()
 	if err != nil {
 		log.Printf("Unable to open file %s, %v\n", target, err)
-		return err
+		return target, err
 	}
+	defer writer.Close()
 
 	archiver := gzip.NewWriter(writer)
-	archiver.Name = filename
+	archiver.Name = filepath.Base(source)
 	defer archiver.Close()
 
 	_, err = io.Copy(archiver, reader)
 	if err == nil {
 		err = os.Remove(source)
-		log.Printf("Compressed data: %s\n", filename)
-		return nil
+		log.Printf("Compressed data: %s\n", archiver.Name)
+		return target, nil
 	} else {
 		log.Printf("Unable to write to file %s, %v\n", target, err)
-		return err
+		return target, err
 	}
 }
 
-func sendToS3(source string) error {
+func sendToS3(source string, timestamp int64) error {
 	filename := filepath.Base(source)
-	filename_dst := fmt.Sprintf("%s/%s", config.Aws.BucketFolder, filename)
+
+	t := time.Unix(timestamp, 0)
+	date := fmt.Sprintf(t.Format("2006-01-02"))
+	filenameDst := fmt.Sprintf("%s/%s/%s", config.Aws.BucketFolder, date, filename)
 
 	file, err := os.Open(source)
-	defer file.Close()
 	if err != nil {
 		log.Printf("Unable to open file %s, %v\n", source, err)
 		return err
 	}
+	defer file.Close()
 
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:      aws.String(config.Aws.Region),
@@ -176,19 +199,19 @@ func sendToS3(source string) error {
 	uploader := s3manager.NewUploader(sess)
 	_, err = uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(config.Aws.Bucket),
-		Key:    aws.String(filename_dst),
+		Key:    aws.String(filenameDst),
 		Body:   file,
 	})
 	if err != nil {
-		log.Printf("Unable to upload  %s to s3://%s/%s, %v", filename, config.Aws.Bucket, filename_dst, err)
+		log.Printf("Unable to upload  %s to s3://%s/%s, %v", filename, config.Aws.Bucket, filenameDst, err)
 		return err
 	}
 
-	log.Printf("Uploaded %s to s3://%s/%s\n", filename, config.Aws.Bucket, filename_dst)
+	log.Printf("Uploaded %s to s3://%s/%s\n", filename, config.Aws.Bucket, filenameDst)
 	return nil
 }
 
-func rotateFile() (string, string, bool) {
+func rotateFile() (string, string, int64, bool) {
 	rotateFileMutex.Lock()
 	defer rotateFileMutex.Unlock()
 
@@ -200,7 +223,7 @@ func rotateFile() (string, string, bool) {
 	if rotateCounter >= config.File.RotateInterval {
 		fullFileNameNew, fullFileNameNewGz, err = ifFileExits(fullFileNameNew, 0)
 		if err != nil {
-			return fullFileNameNew, fullFileNameNewGz, false
+			return fullFileNameNew, fullFileNameNewGz, timestamp, false
 		}
 
 		appendToFileMutex.Lock()
@@ -211,12 +234,12 @@ func rotateFile() (string, string, bool) {
 		openFile() // irrespectivelly from os.Rename result the writer should be active for others
 		if err != nil {
 			log.Printf("Unable to rename %s to %s, %v\n", fullFileName, fullFileNameNew, err)
-			return fullFileNameNew, fullFileNameNewGz, false
+			return fullFileNameNew, fullFileNameNewGz, timestamp, false
 		}
 		rotateCounter = 0
-		return fullFileNameNew, fullFileNameNewGz, true
+		return fullFileNameNew, fullFileNameNewGz, timestamp, true
 	}
-	return fullFileNameNew, fullFileNameNewGz, false
+	return fullFileNameNew, fullFileNameNewGz, timestamp, false
 }
 
 func readLines(file string) {
@@ -239,4 +262,22 @@ func readLines(file string) {
 		log.Println("file: ", hash([]byte(text)), le.Hash, le.Timestamp)
 	}
 
+}
+
+func sha256sum(file string) (string, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		log.Printf("Unable to open file %s, %v\n", file, err)
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		log.Printf("Unable to compute sha256 for file %s, %v\n", file, err)
+		return "", err
+	}
+
+	checksum := fmt.Sprintf("%x", h.Sum(nil))
+	return checksum, nil
 }
