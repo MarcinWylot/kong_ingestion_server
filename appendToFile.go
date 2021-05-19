@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -240,28 +238,6 @@ func rotateFile() (string, string, int64, bool) {
 		return fullFileNameNew, fullFileNameNewGz, timestamp, true
 	}
 	return fullFileNameNew, fullFileNameNewGz, timestamp, false
-}
-
-func readLines(file string) {
-	r, err := os.Open(file)
-	defer r.Close()
-	if err != nil {
-		log.Fatalf("Unable to open file %s, %v\n", file, err)
-	}
-
-	scanner := bufio.NewScanner(r)
-
-	scanner.Split(bufio.ScanLines)
-
-	for scanner.Scan() {
-		text := scanner.Text()
-
-		var le logentry
-		_ = json.Unmarshal([]byte(text), &le)
-
-		log.Println("file: ", hash([]byte(text)), le.Hash, le.Timestamp)
-	}
-
 }
 
 func sha256sum(file string) (string, error) {
