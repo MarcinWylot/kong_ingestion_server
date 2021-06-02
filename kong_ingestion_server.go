@@ -71,9 +71,38 @@ func init() {
 }
 
 func homeView(w http.ResponseWriter, r *http.Request) {
-	headers := w.Header()
-	headers.Add("Content-Type", "text/html")
-	io.WriteString(w, "<html><head></head><body><p>Kong to timescaleDB data ingestion server</p></body></html>")
+	io.WriteString(w, "Kong Ingestion Server")
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	var err error
+	message := "Kong Ingestion Server \n"
+	if config.Aws.Switch == true {
+		err2 := checkS3()
+		if err2 != nil {
+			message += "AWS connection FAILED.\n"
+			err = err2
+		} else {
+			message += "AWS connection OK\n"
+		}
+	}
+
+	if config.Timescale.Switch == true {
+		err2 := checkTimescale(false)
+		if err2 != nil {
+			message += "Timescale connection FAILED\n"
+			err = err2
+		} else {
+			message += "Timescale connection OK\n"
+		}
+	}
+	if err != nil {
+		http.Error(w, message, http.StatusInternalServerError)
+		return
+	}
+
+	io.WriteString(w, message)
+
 }
 
 func processLogs(data []byte, ctx context.Context) error {
@@ -130,6 +159,7 @@ func konglogs(w http.ResponseWriter, r *http.Request) {
 
 func setHandlers() {
 	http.HandleFunc("/", homeView)
+	http.HandleFunc("/health", healthCheck)
 
 	konglogsHandlerFunction := http.HandlerFunc(konglogs)
 	konglogsHandlerFunctionWithTimeout := http.TimeoutHandler(konglogsHandlerFunction, config.Server.TimeoutSecs, "server timeout")
@@ -164,7 +194,7 @@ func startup() {
 
 	if config.Timescale.Switch == true {
 		timescaleConnect()
-		err := checkTimescale(false)
+		err := checkTimescale(true)
 		if err != nil {
 			log.Panicln("Timescale check failed")
 		}
