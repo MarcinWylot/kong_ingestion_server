@@ -21,7 +21,7 @@ To get a local copy up and running follow these simple steps.
 
 1. [Install Golang](https://golang.org/doc/install)
 2. [Install TimescaleDB](https://docs.timescale.com/latest/main)
-3. Create database and [tables](./tables.sql) 
+3. Create database ```CREATE DATABASE kis;``` and [tables](./tables.sql) 
 4. Clone Kong Ingestion Server
    ```sh
    git clone https://github.com/MarcinWylot/kong_ingestion_server.git

@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/spf13/viper"
 	"io"
 	"log"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
-
-	"gopkg.in/gcfg.v1"
 )
 
 var (
@@ -46,30 +46,34 @@ var config = struct {
 }{}
 
 func getConfig(config interface{}, configFile string) {
-	err := gcfg.FatalOnly(gcfg.ReadFileInto(config, configFile))
-	if err != nil {
-		log.Fatalf("Failed to parse config data: %v", err)
+	viper.SetConfigName(configFile)
+	viper.SetConfigType("ini")
+	viper.AddConfigPath("/")
+	viper.AddConfigPath(".")
+
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("KIS")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatalf("Error reading config file:\n %v", err)
 	}
+
+	err := viper.Unmarshal(&config)
+	if err != nil {
+		log.Fatalf("Error decoding config:\n %v", err)
+	}
+
 }
 
 func init() {
-	getConfig(&config, configFile)
-
-	runtime.GOMAXPROCS(config.Server.numberOfCores)
-
-	fullFileName = fmt.Sprintf("%s/%s", config.File.Path, config.File.Name)
-	openFile()
-	rotateCounter = lineCounter(fullFileName)
-
-	if config.Timescale.Switch == true {
-		timescaleConnect()
-	}
+	return
 }
 
 func homeView(w http.ResponseWriter, r *http.Request) {
 	headers := w.Header()
 	headers.Add("Content-Type", "text/html")
-	io.WriteString(w, "<html><head></head><body><p>MW: Kong to timescaleDB data ingestion server</p></body></html>")
+	io.WriteString(w, "<html><head></head><body><p>Kong to timescaleDB data ingestion server</p></body></html>")
 }
 
 func processLogs(data []byte, ctx context.Context) error {
@@ -128,7 +132,7 @@ func setHandlers() {
 	http.HandleFunc("/", homeView)
 
 	konglogsHandlerFunction := http.HandlerFunc(konglogs)
-	konglogsHandlerFunctionWithTimeout := http.TimeoutHandler(konglogsHandlerFunction, config.Server.TimeoutSecs*1000*time.Millisecond, "server timeout")
+	konglogsHandlerFunctionWithTimeout := http.TimeoutHandler(konglogsHandlerFunction, config.Server.TimeoutSecs, "server timeout")
 	http.Handle("/konglogs", konglogsHandlerFunctionWithTimeout)
 }
 
@@ -138,8 +142,8 @@ func runServer() {
 	server := &http.Server{
 		Addr:           config.Server.Addres,
 		Handler:        nil,
-		ReadTimeout:    (config.Server.TimeoutSecs / 2) * time.Second,
-		WriteTimeout:   config.Server.TimeoutSecs * 2 * time.Second,
+		ReadTimeout:    config.Server.TimeoutSecs / 2,
+		WriteTimeout:   config.Server.TimeoutSecs * 2,
 		MaxHeaderBytes: 1 << 20,
 	}
 	log.Println("Openning for connections....")
@@ -149,6 +153,33 @@ func runServer() {
 	}
 }
 
+func startup() {
+	getConfig(&config, configFile)
+
+	runtime.GOMAXPROCS(config.Server.numberOfCores)
+
+	fullFileName = fmt.Sprintf("%s/%s", config.File.Path, config.File.Name)
+	openFile()
+	rotateCounter = lineCounter(fullFileName)
+
+	if config.Timescale.Switch == true {
+		timescaleConnect()
+		err := checkTimescale(false)
+		if err != nil {
+			log.Panicln("Timescale check failed")
+		}
+	}
+
+	if config.Aws.Switch == true {
+		err := checkS3()
+		if err != nil {
+			log.Panicln("AWS S3 check failed")
+		}
+	}
+}
+
 func main() {
+	startup()
+
 	runServer()
 }

@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"log"
-
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"log"
+	"strings"
+	"time"
 )
 
 var (
@@ -41,4 +42,24 @@ func timescaleConnect() {
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
+}
+
+func checkTimescale(full bool) error {
+	var t time.Time
+	err := dbPool.QueryRow(context.Background(), "select NOW()").Scan(&t)
+	if err != nil {
+		log.Printf("Timescale connection check error: %v\n", err)
+		return err
+	}
+
+	if full {
+		query := "select " + strings.Join(config.Timescale.ColumnNames, ",") + " from " + config.Timescale.Table + " limit 1"
+		_, err = dbPool.Query(context.Background(), query)
+		if err != nil {
+			log.Printf("Timescale table check error: %v\n", err)
+			return err
+		}
+	}
+
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"log"
 	"os"
@@ -175,6 +176,32 @@ func gzipFile(source, target_deprecated string) (string, error) {
 		log.Printf("Unable to write to file %s, %v\n", target, err)
 		return target, err
 	}
+}
+
+func checkS3() error {
+	sess, err := session.NewSession(&aws.Config{
+		Region:      aws.String(config.Aws.Region),
+		Credentials: credentials.NewStaticCredentials(config.Aws.AccessKeyId, config.Aws.SecretAccessKey, ""),
+	})
+
+	if err != nil {
+		log.Printf("Unable to connect to S3 %q\n %v\n", config.Aws.Bucket, err)
+		return err
+	}
+
+	svc := s3.New(sess)
+
+	params := s3.HeadBucketInput{
+		Bucket: aws.String(config.Aws.Bucket),
+	}
+
+	_, err = svc.HeadBucket(&params)
+	if err != nil {
+		log.Printf("Unable to HeadBucket %q\n %v\n", config.Aws.Bucket, err)
+		return err
+	}
+
+	return nil
 }
 
 func sendToS3(source string, timestamp int64) error {
