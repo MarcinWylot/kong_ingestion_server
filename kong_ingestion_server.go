@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	configFile = "./config.cfg"
+	configFile = "config.cfg"
 )
 
 var config = struct {
@@ -36,6 +36,7 @@ var config = struct {
 		AccessKeyId     string
 		SecretAccessKey string
 		Region          string
+		RemoveSentFile  bool
 	}
 	Timescale struct {
 		Switch           bool

@@ -92,7 +92,14 @@ func rotate() {
 				if err == nil {
 					fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
 					if err == nil && config.Aws.Switch == true {
-						sendToS3(fullFileNameNewGz, timestamp)
+						err = sendToS3(fullFileNameNewGz, timestamp)
+						if err == nil && config.Aws.RemoveSentFile == true {
+							log.Printf("Removing local file %s\n", fullFileNameNewGz)
+							err = os.Remove(fullFileNameNewGz)
+							if err != nil {
+								log.Printf("Unable to remove local file %s, %v\n", fullFileNameNewGz, err)
+							}
+						}
 					}
 				}
 			}()
