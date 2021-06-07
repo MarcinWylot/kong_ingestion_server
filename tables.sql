@@ -1,7 +1,7 @@
 -- here we place raw logs, hot table, short term
 -- retention 28 days, chunks & compression 6h 
 CREATE TABLE public.events_raw (
-  id SERIAL,
+  id BIGSERIAL,
   time TIMESTAMPTZ,
   log_entry_hash bytea NOT NULL, -- in case we will need to backfill some data, hash&time should be uniq 
   consumer_id character varying DEFAULT NULL, 
