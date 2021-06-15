@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"log"
 	"strings"
-	"time"
 )
 
 var (
@@ -19,7 +18,7 @@ func addToDB(rows []logentry, ctx context.Context) error {
 		pgx.Identifier{config.Timescale.Table},
 		config.Timescale.ColumnNames,
 		pgx.CopyFromSlice(len(rows), func(i int) ([]interface{}, error) {
-			return []interface{}{rows[i].Timestamp, rows[i].Hash, []byte(rows[i].RawJsonString)}, nil
+			return []interface{}{rows[i].Timestamp, []byte(rows[i].RawJsonString)}, nil
 		}),
 	)
 
@@ -45,8 +44,7 @@ func timescaleConnect() {
 }
 
 func checkTimescale(full bool) error {
-	var t time.Time
-	err := dbPool.QueryRow(context.Background(), "select NOW()").Scan(&t)
+	_, err := dbPool.Exec(context.Background(), "select NOW()")
 	if err != nil {
 		log.Printf("Timescale connection check error: %v\n", err)
 		return err
@@ -54,7 +52,7 @@ func checkTimescale(full bool) error {
 
 	if full {
 		query := "select " + strings.Join(config.Timescale.ColumnNames, ",") + " from " + config.Timescale.Table + " limit 1"
-		_, err = dbPool.Query(context.Background(), query)
+		_, err = dbPool.Exec(context.Background(), query)
 		if err != nil {
 			log.Printf("Timescale table check error: %v\n", err)
 			return err

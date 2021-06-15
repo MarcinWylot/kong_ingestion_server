@@ -83,26 +83,32 @@ func lineCounter(file string) int {
 	}
 }
 
-func rotate() {
-	if rotateCounter >= config.File.RotateInterval {
-		fullFileNameNew, _, timestamp, result := rotateFile()
-		if result {
-			go func() { // no need to wait for gzip and s3
-				fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
-				if err == nil {
-					fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
-					if err == nil && config.Aws.Switch == true {
-						err = sendToS3(fullFileNameNewGz, timestamp)
-						if err == nil && config.Aws.RemoveSentFile == true {
-							log.Printf("Removing local file %s\n", fullFileNameNewGz)
-							err = os.Remove(fullFileNameNewGz)
-							if err != nil {
-								log.Printf("Unable to remove local file %s, %v\n", fullFileNameNewGz, err)
-							}
-						}
-					}
+func gzipAndS3(fullFileNameNew string, timestamp int64) {
+	fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
+	if err == nil {
+		fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
+		if err == nil && config.Aws.Switch == true {
+			err = sendToS3(fullFileNameNewGz, timestamp)
+			if err == nil && config.Aws.RemoveSentFile == true {
+				log.Printf("Removing local file %s\n", fullFileNameNewGz)
+				err = os.Remove(fullFileNameNewGz)
+				if err != nil {
+					log.Printf("Unable to remove local file %s, %v\n", fullFileNameNewGz, err)
 				}
-			}()
+			}
+		}
+	}
+}
+
+func rotate(rotateInterval int, wait bool) {
+	if rotateCounter >= rotateInterval {
+		fullFileNameNew, _, timestamp, result := rotateFile(rotateInterval)
+		if result {
+			if wait == true {
+				gzipAndS3(fullFileNameNew, timestamp)
+			} else {
+				go gzipAndS3(fullFileNameNew, timestamp) // no need to wait for gzip and s3
+			}
 		}
 	}
 }
@@ -245,7 +251,7 @@ func sendToS3(source string, timestamp int64) error {
 	return nil
 }
 
-func rotateFile() (string, string, int64, bool) {
+func rotateFile(rotateInterval int) (string, string, int64, bool) {
 	rotateFileMutex.Lock()
 	defer rotateFileMutex.Unlock()
 
@@ -254,7 +260,7 @@ func rotateFile() (string, string, int64, bool) {
 	timestamp := time.Now().Unix()
 	fullFileNameNew := fmt.Sprintf("%s.%d", fullFileName, timestamp)
 
-	if rotateCounter >= config.File.RotateInterval {
+	if rotateCounter >= rotateInterval {
 		fullFileNameNew, fullFileNameNewGz, err = ifFileExits(fullFileNameNew, 0)
 		if err != nil {
 			return fullFileNameNew, fullFileNameNewGz, timestamp, false
@@ -293,7 +299,7 @@ func readLines(file string) {
 		var le logentry
 		_ = json.Unmarshal([]byte(text), &le)
 
-		log.Println("file: ", hash([]byte(text)), le.Hash, le.Timestamp)
+		log.Println("file: ", le.Timestamp)
 	}
 
 }

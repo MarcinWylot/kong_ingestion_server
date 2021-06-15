@@ -8,14 +8,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
 var (
 	configFile = "config.cfg"
 )
+
+var server http.Server
 
 var config = struct {
 	Server struct {
@@ -127,7 +133,7 @@ func processLogs(data []byte, ctx context.Context) error {
 		return err
 	}
 
-	rotate()
+	rotate(config.File.RotateInterval, false)
 
 	return nil
 
@@ -167,24 +173,77 @@ func setHandlers() {
 	http.Handle("/konglogs", konglogsHandlerFunctionWithTimeout)
 }
 
-func runServer() {
+func runServer(wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
 	setHandlers()
 
-	server := &http.Server{
-		Addr:           config.Server.Addres,
-		Handler:        nil,
-		ReadTimeout:    config.Server.TimeoutSecs / 2,
-		WriteTimeout:   config.Server.TimeoutSecs * 2,
-		MaxHeaderBytes: 1 << 20,
-	}
-	log.Println("Openning for connections....")
+	server.Addr = config.Server.Addres
+	server.Handler = nil
+	server.ReadTimeout = config.Server.TimeoutSecs / 2
+	server.WriteTimeout = config.Server.TimeoutSecs * 2
+	server.MaxHeaderBytes = 1 << 20
+
+	log.Println("Opening for connections....")
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Fatal(err)
+		log.Println("HTTP Server: ", err)
 	}
 }
 
-func startup() {
+func shutdown() {
+	//close timescaleDB connections
+	if config.Timescale.Switch == true {
+		log.Println("Closing DB pool.")
+		dbPool.Close()
+	}
+
+	//close HTTP server
+	log.Println("Closing HTTP server.")
+	if err := server.Shutdown(context.Background()); err != nil {
+		log.Printf("HTTP server Shutdown failed: %v", err)
+	}
+
+	//rotate and send to S3
+	if config.Aws.Switch == true {
+		log.Println("S3 graceful handling.")
+		rotate(10, true)
+	}
+
+}
+
+func setupGracefulShutdown(wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		stop := make(chan os.Signal)
+		signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+
+		defer signal.Stop(stop)
+		defer wg.Done()
+		sig := <-stop
+		log.Println("Graceful shutdown begins. Signal: ", sig)
+		shutdown()
+		log.Println("Graceful shutdown done.")
+	}()
+}
+
+func setupRotateToS3onSignal() {
+	if config.Aws.Switch == false {
+		return
+	}
+	go func() {
+		for {
+			c := make(chan os.Signal)
+			signal.Notify(c, syscall.SIGUSR1)
+			sig := <-c
+			log.Println("Rotating file. Signal: ", sig)
+
+			rotate(10, true)
+		}
+	}()
+}
+
+func startup(wg *sync.WaitGroup) {
 	getConfig(&config, configFile)
 
 	runtime.GOMAXPROCS(config.Server.numberOfCores)
@@ -207,10 +266,18 @@ func startup() {
 			log.Panicln("AWS S3 check failed")
 		}
 	}
+
+	setupGracefulShutdown(wg)
+	setupRotateToS3onSignal()
 }
 
 func main() {
-	startup()
+	var wg sync.WaitGroup
 
-	runServer()
+	startup(&wg)
+
+	runServer(&wg)
+
+	wg.Wait()
+	log.Println("Bye Bye....")
 }
