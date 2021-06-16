@@ -88,12 +88,12 @@ func lineCounter(file string) int {
 }
 
 func gzipAndS3(fullFileNameNew string, timestamp int64) {
-	defer timeMeasurement(time.Now(), "gzipAndS3")
+	defer timeMeasurement(time.Now(), "Checksum-Gzip-S3")
 	shutdownWG.Add(1)
 	defer shutdownWG.Done()
 	fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
 	if err == nil {
-		fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
+		fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum)
 		if err == nil && config.Aws.Switch == true {
 			err = sendToS3(fullFileNameNewGz, timestamp)
 			if err == nil && config.Aws.RemoveSentFile == true {
@@ -167,7 +167,7 @@ func renameWithChecksum(source string) (string, error) {
 	return sourceChecksum, err
 }
 
-func gzipFile(source, target_deprecated string) (string, error) {
+func gzipFile(source string) (string, error) {
 
 	target := fmt.Sprintf("%s.gz", source)
 

@@ -27,7 +27,7 @@ var shutdownWG sync.WaitGroup
 var config = struct {
 	Server struct {
 		TimeoutSecs   time.Duration
-		Addres        string
+		Address       string
 		numberOfCores int
 	}
 	File struct {
@@ -184,7 +184,7 @@ func runServer() {
 	defer shutdownWG.Done()
 	setHandlers()
 
-	server.Addr = config.Server.Addres
+	server.Addr = config.Server.Address
 	server.Handler = nil
 	server.ReadTimeout = config.Server.TimeoutSecs / 2
 	server.WriteTimeout = config.Server.TimeoutSecs * 2
