@@ -22,6 +22,7 @@ var (
 )
 
 var server http.Server
+var shutdownWG sync.WaitGroup
 
 var config = struct {
 	Server struct {
@@ -36,13 +37,14 @@ var config = struct {
 		BufferIncrement int
 	}
 	Aws struct {
-		Switch          bool
-		Bucket          string
-		BucketFolder    string
-		AccessKeyId     string
-		SecretAccessKey string
-		Region          string
-		RemoveSentFile  bool
+		Switch            bool
+		Bucket            string
+		BucketFolder      string
+		AccessKeyId       string
+		SecretAccessKey   string
+		Region            string
+		RemoveSentFile    bool
+		InactivityTimeout time.Duration
 	}
 	Timescale struct {
 		Switch           bool
@@ -71,6 +73,10 @@ func getConfig(config interface{}, configFile string) {
 		log.Fatalf("Error decoding config:\n %v", err)
 	}
 
+}
+func timeMeasurement(start time.Time, name string) {
+	elapsed := time.Since(start)
+	log.Printf("[%s] execution time: %s", name, elapsed)
 }
 
 func init() {
@@ -173,9 +179,9 @@ func setHandlers() {
 	http.Handle("/konglogs", konglogsHandlerFunctionWithTimeout)
 }
 
-func runServer(wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
+func runServer() {
+	shutdownWG.Add(1)
+	defer shutdownWG.Done()
 	setHandlers()
 
 	server.Addr = config.Server.Addres
@@ -227,23 +233,35 @@ func setupGracefulShutdown(wg *sync.WaitGroup) {
 	}()
 }
 
-func setupRotateToS3onSignal() {
-	if config.Aws.Switch == false {
-		return
+func setupRotateToS3onSignal(wg *sync.WaitGroup) {
+	for {
+		c := make(chan os.Signal)
+		signal.Notify(c, syscall.SIGUSR1)
+		sig := <-c
+		log.Println("Rotating file. Signal: ", sig)
+		wg.Add(1)
+		rotate(10, true)
+		wg.Done()
 	}
-	go func() {
-		for {
-			c := make(chan os.Signal)
-			signal.Notify(c, syscall.SIGUSR1)
-			sig := <-c
-			log.Println("Rotating file. Signal: ", sig)
-
-			rotate(10, true)
-		}
-	}()
 }
 
-func startup(wg *sync.WaitGroup) {
+func rotateToS3onInactivity(wg *sync.WaitGroup) {
+	var lastTimestamp time.Time
+	for {
+		lastTimestamp = globalLastTimesatmp
+		time.Sleep(config.Aws.InactivityTimeout)
+		log.Println("Checking Inactivity timeout: ", !globalLastTimesatmp.After(lastTimestamp))
+		if !globalLastTimesatmp.After(lastTimestamp) {
+			wg.Add(1)
+			log.Println("Inactivity timeout triggered: ", config.Aws.InactivityTimeout)
+			rotate(10, true)
+			wg.Done()
+		}
+
+	}
+}
+
+func startup() {
 	getConfig(&config, configFile)
 
 	runtime.GOMAXPROCS(config.Server.numberOfCores)
@@ -267,17 +285,20 @@ func startup(wg *sync.WaitGroup) {
 		}
 	}
 
-	setupGracefulShutdown(wg)
-	setupRotateToS3onSignal()
+	setupGracefulShutdown(&shutdownWG)
+	if config.Aws.Switch {
+		go setupRotateToS3onSignal(&shutdownWG)
+		if config.Aws.InactivityTimeout > 0 {
+			go rotateToS3onInactivity(&shutdownWG)
+		}
+	}
 }
 
 func main() {
-	var wg sync.WaitGroup
+	startup()
 
-	startup(&wg)
+	runServer()
 
-	runServer(&wg)
-
-	wg.Wait()
+	shutdownWG.Wait()
 	log.Println("Bye Bye....")
 }

@@ -29,6 +29,7 @@ var (
 	appendFileDesriptor *os.File
 	fullFileName        string
 	rotateCounter       = 0
+	globalLastTimesatmp time.Time
 )
 
 func openFile() {
@@ -55,6 +56,9 @@ func appendToFile(array []logentry) error {
 		return err
 	}
 	rotateCounter += len(array)
+	if globalLastTimesatmp.Before(array[len(array)-1].Timestamp) {
+		globalLastTimesatmp = array[len(array)-1].Timestamp
+	}
 	log.Printf("Appended %d entries to %s\n", len(array), fullFileName)
 	return nil
 }
@@ -84,6 +88,9 @@ func lineCounter(file string) int {
 }
 
 func gzipAndS3(fullFileNameNew string, timestamp int64) {
+	defer timeMeasurement(time.Now(), "gzipAndS3")
+	shutdownWG.Add(1)
+	defer shutdownWG.Done()
 	fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
 	if err == nil {
 		fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum, "")
@@ -101,6 +108,8 @@ func gzipAndS3(fullFileNameNew string, timestamp int64) {
 }
 
 func rotate(rotateInterval int, wait bool) {
+	shutdownWG.Add(1)
+	defer shutdownWG.Done()
 	if rotateCounter >= rotateInterval {
 		fullFileNameNew, _, timestamp, result := rotateFile(rotateInterval)
 		if result {
@@ -268,10 +277,10 @@ func rotateFile(rotateInterval int) (string, string, int64, bool) {
 
 		appendToFileMutex.Lock()
 		defer appendToFileMutex.Unlock()
-		log.Printf("Rotating file to %s", fullFileNameNew)
+		log.Printf("%d events. Rotating file to %s", rotateCounter, fullFileNameNew)
 		appendFileDesriptor.Close()
 		err := os.Rename(fullFileName, fullFileNameNew)
-		openFile() // irrespectivelly from os.Rename result the writer should be active for others
+		openFile() // irrespectively from os.Rename result the writer should be active for others
 		if err != nil {
 			log.Printf("Unable to rename %s to %s, %v\n", fullFileName, fullFileNameNew, err)
 			return fullFileNameNew, fullFileNameNewGz, timestamp, false
