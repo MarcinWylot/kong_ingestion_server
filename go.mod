@@ -5,6 +5,12 @@ go 1.16
 require (
 	github.com/armon/consul-api v0.0.0-20180202201655-eb2c6b5be1b6 // indirect
 	github.com/aws/aws-sdk-go v1.37.32 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.6.0 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.3.0 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.2.1 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.2.3 // indirect
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.10.0 // indirect
+	github.com/go-sql-driver/mysql v1.4.0 // indirect
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/jackc/pgx/v4 v4.10.1 // indirect
 	github.com/json-iterator/go v1.1.9 // indirect

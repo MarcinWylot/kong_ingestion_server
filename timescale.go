@@ -15,8 +15,8 @@ var (
 func addToDB(rows []logentry, ctx context.Context) error {
 	cnt, err := dbPool.CopyFrom(
 		ctx,
-		pgx.Identifier{config.Timescale.Table},
-		config.Timescale.ColumnNames,
+		pgx.Identifier{kisConfig.Timescale.Table},
+		kisConfig.Timescale.ColumnNames,
 		pgx.CopyFromSlice(len(rows), func(i int) ([]interface{}, error) {
 			return []interface{}{rows[i].Timestamp, []byte(rows[i].RawJsonString)}, nil
 		}),
@@ -29,7 +29,7 @@ func addToDB(rows []logentry, ctx context.Context) error {
 	if err != nil { // no need to panic here, if something is wrong with a DB other tnah context cancel, then we keep prosessing data
 		log.Printf("Unable to copy %d rows to TimescaleDB, %v\n", len(rows), err)
 	} else {
-		log.Printf("Coppied %d rows to %s.\n", cnt, config.Timescale.Table)
+		log.Printf("Coppied %d rows to %s.\n", cnt, kisConfig.Timescale.Table)
 	}
 
 	return nil
@@ -37,7 +37,7 @@ func addToDB(rows []logentry, ctx context.Context) error {
 
 func timescaleConnect() {
 	var err error
-	dbPool, err = pgxpool.Connect(context.Background(), config.Timescale.ConnectionString)
+	dbPool, err = pgxpool.Connect(context.Background(), kisConfig.Timescale.ConnectionString)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
@@ -51,7 +51,7 @@ func checkTimescale(full bool) error {
 	}
 
 	if full {
-		query := "select " + strings.Join(config.Timescale.ColumnNames, ",") + " from " + config.Timescale.Table + " limit 1"
+		query := "select " + strings.Join(kisConfig.Timescale.ColumnNames, ",") + " from " + kisConfig.Timescale.Table + " limit 1"
 		_, err = dbPool.Exec(context.Background(), query)
 		if err != nil {
 			log.Printf("Timescale table check error: %v\n", err)

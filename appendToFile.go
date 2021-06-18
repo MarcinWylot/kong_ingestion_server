@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"log"
 	"os"
@@ -17,10 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 var (
@@ -37,13 +38,13 @@ func openFile() {
 	appendFileDesriptor, err = os.OpenFile(fullFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 
 	if err != nil {
-		log.Panicf("Unable to open file %s, %v\n", fullFileName, err)
+		log.Fatalf("Unable to open file %s, %v\n", fullFileName, err)
 	}
 }
 
 func appendToFile(array []logentry) error {
 	var raw_values strings.Builder
-	raw_values.Grow(config.File.BufferIncrement)
+	raw_values.Grow(kisConfig.File.BufferIncrement)
 	for k := range array {
 		fmt.Fprintf(&raw_values, "%s\n", array[k].RawJsonString)
 	}
@@ -94,9 +95,9 @@ func gzipAndS3(fullFileNameNew string, timestamp int64) {
 	fullFileNameNewWithChecksum, err := renameWithChecksum(fullFileNameNew)
 	if err == nil {
 		fullFileNameNewGz, err := gzipFile(fullFileNameNewWithChecksum)
-		if err == nil && config.Aws.Switch == true {
+		if err == nil && kisConfig.Aws.Switch == true {
 			err = sendToS3(fullFileNameNewGz, timestamp)
-			if err == nil && config.Aws.RemoveSentFile == true {
+			if err == nil && kisConfig.Aws.RemoveSentFile == true {
 				log.Printf("Removing local file %s\n", fullFileNameNewGz)
 				err = os.Remove(fullFileNameNewGz)
 				if err != nil {
@@ -200,26 +201,35 @@ func gzipFile(source string) (string, error) {
 	}
 }
 
-func checkS3() error {
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String(config.Aws.Region),
-		Credentials: credentials.NewStaticCredentials(config.Aws.AccessKeyId, config.Aws.SecretAccessKey, ""),
-	})
+func awsClient(ctx context.Context) *s3.Client {
+	var cfg aws.Config
+	var err error
 
-	if err != nil {
-		log.Printf("Unable to connect to S3 %q\n %v\n", config.Aws.Bucket, err)
-		return err
+	if len(kisConfig.Aws.Region) > 0 && len(kisConfig.Aws.AccessKeyId) > 0 && len(kisConfig.Aws.SecretAccessKey) > 0 {
+		cfg.Region = kisConfig.Aws.Region
+		cfg.Credentials = credentials.NewStaticCredentialsProvider(kisConfig.Aws.AccessKeyId, kisConfig.Aws.SecretAccessKey, "")
+	} else {
+		cfg, err = config.LoadDefaultConfig(ctx)
+		if err != nil {
+			log.Printf("Unable to Load Default AWS Config.\n%v", err)
+		}
 	}
 
-	svc := s3.New(sess)
+	return s3.NewFromConfig(cfg)
+}
+
+func checkS3() error {
+	ctx := context.Background()
+
+	svc := awsClient(ctx)
 
 	params := s3.HeadBucketInput{
-		Bucket: aws.String(config.Aws.Bucket),
+		Bucket: aws.String(kisConfig.Aws.Bucket),
 	}
 
-	_, err = svc.HeadBucket(&params)
+	_, err := svc.HeadBucket(ctx, &params)
 	if err != nil {
-		log.Printf("Unable to HeadBucket %q\n %v\n", config.Aws.Bucket, err)
+		log.Printf("Unable to HeadBucket %q\n %v\n", kisConfig.Aws.Bucket, err)
 		return err
 	}
 
@@ -231,7 +241,7 @@ func sendToS3(source string, timestamp int64) error {
 
 	t := time.Unix(timestamp, 0)
 	date := fmt.Sprintf(t.Format("2006-01-02"))
-	filenameDst := fmt.Sprintf("%s/%s/%s", config.Aws.BucketFolder, date, filename)
+	filenameDst := fmt.Sprintf("%s/%s/%s", kisConfig.Aws.BucketFolder, date, filename)
 
 	file, err := os.Open(source)
 	if err != nil {
@@ -240,23 +250,20 @@ func sendToS3(source string, timestamp int64) error {
 	}
 	defer file.Close()
 
-	sess := session.Must(session.NewSession(&aws.Config{
-		Region:      aws.String(config.Aws.Region),
-		Credentials: credentials.NewStaticCredentials(config.Aws.AccessKeyId, config.Aws.SecretAccessKey, ""),
-	}))
-
-	uploader := s3manager.NewUploader(sess)
-	_, err = uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(config.Aws.Bucket),
+	ctx := context.Background()
+	svc := awsClient(ctx)
+	uploader := manager.NewUploader(svc)
+	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(kisConfig.Aws.Bucket),
 		Key:    aws.String(filenameDst),
 		Body:   file,
 	})
 	if err != nil {
-		log.Printf("Unable to upload  %s to s3://%s/%s, %v", filename, config.Aws.Bucket, filenameDst, err)
+		log.Printf("Unable to upload  %s to s3://%s/%s, %v", filename, kisConfig.Aws.Bucket, filenameDst, err)
 		return err
 	}
 
-	log.Printf("Uploaded %s to s3://%s/%s\n", filename, config.Aws.Bucket, filenameDst)
+	log.Printf("Uploaded %s to s3://%s/%s\n", filename, kisConfig.Aws.Bucket, filenameDst)
 	return nil
 }
 

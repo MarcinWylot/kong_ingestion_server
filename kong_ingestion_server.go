@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"github.com/spf13/viper"
 	"io"
@@ -17,14 +18,10 @@ import (
 	"time"
 )
 
-var (
-	configFile = "config.cfg"
-)
-
 var server http.Server
 var shutdownWG sync.WaitGroup
 
-var config = struct {
+var kisConfig = struct {
 	Server struct {
 		TimeoutSecs   time.Duration
 		Address       string
@@ -90,7 +87,7 @@ func homeView(w http.ResponseWriter, r *http.Request) {
 func healthCheck(w http.ResponseWriter, r *http.Request) {
 	var err error
 	message := "Kong Ingestion Server \n"
-	if config.Aws.Switch == true {
+	if kisConfig.Aws.Switch == true {
 		err2 := checkS3()
 		if err2 != nil {
 			message += "AWS connection FAILED.\n"
@@ -100,7 +97,7 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if config.Timescale.Switch == true {
+	if kisConfig.Timescale.Switch == true {
 		err2 := checkTimescale(false)
 		if err2 != nil {
 			message += "Timescale connection FAILED\n"
@@ -127,7 +124,7 @@ func processLogs(data []byte, ctx context.Context) error {
 	}
 
 	log.Printf("Storing %d entries\n", len(array))
-	if config.Timescale.Switch == true {
+	if kisConfig.Timescale.Switch == true {
 		err = addToDB(array, ctx)
 		if err != nil {
 			return err
@@ -139,7 +136,7 @@ func processLogs(data []byte, ctx context.Context) error {
 		return err
 	}
 
-	rotate(config.File.RotateInterval, false)
+	rotate(kisConfig.File.RotateInterval, false)
 
 	return nil
 
@@ -175,7 +172,7 @@ func setHandlers() {
 	http.HandleFunc("/health", healthCheck)
 
 	konglogsHandlerFunction := http.HandlerFunc(konglogs)
-	konglogsHandlerFunctionWithTimeout := http.TimeoutHandler(konglogsHandlerFunction, config.Server.TimeoutSecs, "server timeout")
+	konglogsHandlerFunctionWithTimeout := http.TimeoutHandler(konglogsHandlerFunction, kisConfig.Server.TimeoutSecs, "server timeout")
 	http.Handle("/konglogs", konglogsHandlerFunctionWithTimeout)
 }
 
@@ -184,34 +181,36 @@ func runServer() {
 	defer shutdownWG.Done()
 	setHandlers()
 
-	server.Addr = config.Server.Address
+	server.Addr = kisConfig.Server.Address
 	server.Handler = nil
-	server.ReadTimeout = config.Server.TimeoutSecs / 2
-	server.WriteTimeout = config.Server.TimeoutSecs * 2
+	server.ReadTimeout = kisConfig.Server.TimeoutSecs / 2
+	server.WriteTimeout = kisConfig.Server.TimeoutSecs * 2
 	server.MaxHeaderBytes = 1 << 20
 
 	log.Println("Opening for connections....")
 	err := server.ListenAndServe()
-	if err != nil {
-		log.Println("HTTP Server: ", err)
+	if err != http.ErrServerClosed {
+		log.Fatalf("HTTP server error: %v", err)
+	} else {
+		log.Println("HTTP server shutdown. ", err)
 	}
 }
 
 func shutdown() {
-	//close timescaleDB connections
-	if config.Timescale.Switch == true {
-		log.Println("Closing DB pool.")
-		dbPool.Close()
-	}
-
 	//close HTTP server
 	log.Println("Closing HTTP server.")
 	if err := server.Shutdown(context.Background()); err != nil {
 		log.Printf("HTTP server Shutdown failed: %v", err)
 	}
 
+	//close timescaleDB connections
+	if kisConfig.Timescale.Switch == true {
+		log.Println("Closing DB pool.")
+		dbPool.Close()
+	}
+
 	//rotate and send to S3
-	if config.Aws.Switch == true {
+	if kisConfig.Aws.Switch == true {
 		log.Println("S3 graceful handling.")
 		rotate(10, true)
 	}
@@ -249,11 +248,11 @@ func rotateToS3onInactivity(wg *sync.WaitGroup) {
 	var lastTimestamp time.Time
 	for {
 		lastTimestamp = globalLastTimesatmp
-		time.Sleep(config.Aws.InactivityTimeout)
+		time.Sleep(kisConfig.Aws.InactivityTimeout)
 		log.Println("Checking Inactivity timeout: ", !globalLastTimesatmp.After(lastTimestamp))
 		if !globalLastTimesatmp.After(lastTimestamp) {
 			wg.Add(1)
-			log.Println("Inactivity timeout triggered: ", config.Aws.InactivityTimeout)
+			log.Println("Inactivity timeout triggered: ", kisConfig.Aws.InactivityTimeout)
 			rotate(10, true)
 			wg.Done()
 		}
@@ -262,33 +261,37 @@ func rotateToS3onInactivity(wg *sync.WaitGroup) {
 }
 
 func startup() {
-	getConfig(&config, configFile)
+	var configFile string
+	flag.StringVar(&configFile, "c", "config.cfg", "Specify config file. Default: config.cfg")
+	flag.Parse()
 
-	runtime.GOMAXPROCS(config.Server.numberOfCores)
+	getConfig(&kisConfig, configFile)
 
-	fullFileName = fmt.Sprintf("%s/%s", config.File.Path, config.File.Name)
+	runtime.GOMAXPROCS(kisConfig.Server.numberOfCores)
+
+	fullFileName = fmt.Sprintf("%s/%s", kisConfig.File.Path, kisConfig.File.Name)
 	openFile()
 	rotateCounter = lineCounter(fullFileName)
 
-	if config.Timescale.Switch == true {
+	if kisConfig.Timescale.Switch == true {
 		timescaleConnect()
 		err := checkTimescale(true)
 		if err != nil {
-			log.Panicln("Timescale check failed")
+			log.Fatalln("Timescale check failed")
 		}
 	}
 
-	if config.Aws.Switch == true {
+	if kisConfig.Aws.Switch == true {
 		err := checkS3()
 		if err != nil {
-			log.Panicln("AWS S3 check failed")
+			log.Fatalln("AWS S3 check failed")
 		}
 	}
 
 	setupGracefulShutdown(&shutdownWG)
-	if config.Aws.Switch {
+	if kisConfig.Aws.Switch {
 		go setupRotateToS3onSignal(&shutdownWG)
-		if config.Aws.InactivityTimeout > 0 {
+		if kisConfig.Aws.InactivityTimeout > 0 {
 			go rotateToS3onInactivity(&shutdownWG)
 		}
 	}
@@ -296,9 +299,7 @@ func startup() {
 
 func main() {
 	startup()
-
 	runServer()
-
 	shutdownWG.Wait()
 	log.Println("Bye Bye....")
 }
